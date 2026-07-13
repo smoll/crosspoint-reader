@@ -28,9 +28,18 @@ New files (additive):
   web change; committed here so the firmware builds without a JS toolchain)
 - `test/token_bmp_decoder/` — gtest suite for the decoder
 
+Connectivity is zero-touch: auto-join the strongest saved Wi-Fi network,
+falling back to a WPA2 hotspot (`ScootScoot`, per-device password shown in a
+join QR) when nothing connectable is in range. Confirm toggles between the
+two from the idle screen. No captive portal — a portal would trap the PWA in
+iOS's sandboxed sign-in browser.
+
 Upstream files touched (kept minimal for rebases):
 
 - `src/activities/ActivityManager.{h,cpp}` — `HomeMenuItem::TOKEN_MODE`, `goToTokenMode()`
 - `src/activities/home/HomeActivity.{h,cpp}` — home-menu entry
+- `src/activities/network/WifiSelectionActivity.{h,cpp}` — opt-in
+  `autoConnectOnly` flag: completes as cancelled instead of showing the
+  manual picker when auto-connect is exhausted
 - `lib/I18n/translations/english.yaml` — `STR_TOKEN_MODE`, `STR_TOKEN_MODE_HINT`
 - `test/CMakeLists.txt` — registers the decoder suite

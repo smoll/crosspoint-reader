@@ -76,6 +76,11 @@ class WifiSelectionActivity final : public Activity {
   // Whether to attempt auto-connect on entry
   const bool allowAutoConnect;
 
+  // When true, never show the manual network list: complete as cancelled once
+  // auto-connect is exhausted. Lets callers (e.g. token mode) fall back to
+  // their own no-network behavior without user interaction.
+  const bool autoConnectOnly;
+
   // Whether we are attempting to auto-connect or auto-scan saved networks.
   bool autoConnecting = false;
 
@@ -120,8 +125,11 @@ class WifiSelectionActivity final : public Activity {
   void onComplete(bool connected);
 
  public:
-  explicit WifiSelectionActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, bool autoConnect = true)
-      : Activity("WifiSelection", renderer, mappedInput), allowAutoConnect(autoConnect) {}
+  explicit WifiSelectionActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, bool autoConnect = true,
+                                 bool autoConnectOnly = false)
+      : Activity("WifiSelection", renderer, mappedInput),
+        allowAutoConnect(autoConnect),
+        autoConnectOnly(autoConnectOnly) {}
   void onEnter() override;
   void onExit() override;
   void loop() override;

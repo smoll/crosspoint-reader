@@ -115,6 +115,10 @@ void WifiSelectionActivity::processWifiScanResults() {
   }
 
   if (scanResult == WIFI_SCAN_FAILED) {
+    if (autoConnectOnly) {
+      onComplete(false);
+      return;
+    }
     networks.clear();
     realNetworkCount = 0;
     appendHiddenNetworkEntry();
@@ -169,6 +173,11 @@ void WifiSelectionActivity::processWifiScanResults() {
   WiFi.scanDelete();
 
   if (autoConnecting && !manualNetworkListRequested && tryNextSavedNetworkFromScan()) {
+    return;
+  }
+
+  if (autoConnectOnly && !manualNetworkListRequested) {
+    onComplete(false);
     return;
   }
 
@@ -314,6 +323,10 @@ void WifiSelectionActivity::handleAutoConnectFailure() {
 
   if (!networks.empty()) {
     if (tryNextSavedNetworkFromScan()) {
+      return;
+    }
+    if (autoConnectOnly) {
+      onComplete(false);
       return;
     }
     autoConnecting = false;
