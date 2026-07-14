@@ -3,7 +3,9 @@
 This branch adds **Token Mode** for the [scoot-scoot](https://github.com/smoll/scoot-scoot)
 MTG e-ink clone-card project: a home-menu activity that joins Wi-Fi, serves
 the scoot-scoot PWA from flash, and accepts full-screen 1-bit BMP pushes on
-`POST /display`. Protocol: `docs/PROTOCOL.md` in the scoot-scoot repo.
+`POST /display`, plus app-driven Wi-Fi provisioning (`/api/wifi`,
+`/api/wifi/scan`, `/api/mode`). Protocol: `docs/PROTOCOL.md` in the
+scoot-scoot repo.
 
 ## ⚠️ Never open a PR against upstream
 
