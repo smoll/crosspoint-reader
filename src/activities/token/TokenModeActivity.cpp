@@ -57,8 +57,17 @@ void TokenModeActivity::onEnter() {
   connectedIP.clear();
   connectedSSID.clear();
 
-  // Zero-touch entry: try saved networks silently; no saved networks means
-  // the picker can't help, so go straight to the hotspot.
+  // The credential store lives on the SD card and every token-mode exit
+  // reboots the device — load it or getCredentials() is always empty and
+  // we'd wrongly fall into hotspot mode despite a saved home network.
+  {
+    RenderLock lock;  // SD read shares the SPI bus with the panel
+    WIFI_STORE.loadFromFile();
+  }
+
+  // Zero-touch entry: rejoin the last/strongest saved network silently; the
+  // hotspot is only for when there is truly nothing to join (first boot,
+  // game store) or via the explicit Enable Hotspot button.
   if (WIFI_STORE.getCredentials().empty()) {
     startHotspot();
   } else {
@@ -256,7 +265,7 @@ void TokenModeActivity::renderIdleScreen() const {
   }
 
   const auto labels =
-      mappedInput.mapLabels(tr(STR_EXIT), apMode ? tr(STR_JOIN_NETWORK) : tr(STR_CREATE_HOTSPOT), "", "");
+      mappedInput.mapLabels(tr(STR_EXIT), apMode ? tr(STR_JOIN_NETWORK) : tr(STR_ENABLE_HOTSPOT), "", "");
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
   renderer.displayBuffer();
 }
