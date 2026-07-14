@@ -41,6 +41,24 @@ void TokenModeServer::begin() {
     server->send(204, "text/plain", "");
   });
   server->on("/api/token-status", HTTP_GET, [this] { handleStatus(); });
+  // Fleet device contract (scoot-scoot docs/fleet/PROTOCOL.md): devices
+  // self-describe so the app never hardcodes geometry per device type.
+  server->on("/api/device", HTTP_GET, [this] {
+    touch();
+    sendCors();
+    JsonDocument doc;
+    doc["name"] = "x3";
+    doc["fw_version"] = "token-mode";
+    JsonObject display = doc["display"].to<JsonObject>();
+    display["width"] = renderer.getScreenWidth();
+    display["height"] = renderer.getScreenHeight();
+    display["orientation"] = "portrait";
+    display["grayscale"] = 1;
+    doc["capabilities"].to<JsonArray>().add("display");
+    std::string body;
+    serializeJson(doc, body);
+    server->send(200, "application/json", body.c_str());
+  });
   // Wi-Fi management: the app scans/provisions through the device so the
   // phone never needs (and iOS never grants) Wi-Fi scanning itself.
   server->on("/api/wifi/scan", HTTP_GET, [this] { handleWifiScan(); });
