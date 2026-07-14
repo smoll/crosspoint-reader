@@ -88,6 +88,11 @@ void TokenModeActivity::onExit() {
 void TokenModeActivity::startWifiSelection(const bool autoConnectOnly) {
   state = State::WIFI_SELECTION;
   stopServer();
+  // Stop mDNS BEFORE tearing interfaces down: its service task otherwise
+  // races on the disappearing netif and crashes in _udp_join_group
+  // (seen live: LoadProhibited in esp_netif_is_netif_up during the
+  // hotspot->STA transition of Wi-Fi provisioning).
+  MDNS.end();
   if (apMode) {
     WiFi.softAPdisconnect(true);
     apMode = false;
@@ -111,6 +116,7 @@ void TokenModeActivity::startWifiSelection(const bool autoConnectOnly) {
 
 void TokenModeActivity::startHotspot() {
   stopServer();
+  MDNS.end();  // same netif race as startWifiSelection: stop before mode change
   LOG_DBG(TAG, "Starting token hotspot...");
   // AP+STA so /api/wifi/scan can run while the hotspot is up.
   WiFi.mode(WIFI_AP_STA);
