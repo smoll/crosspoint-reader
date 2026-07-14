@@ -47,6 +47,12 @@ void HomeActivity::loadRecentBooks(int maxBooks) {
       continue;
     }
 
+    // Crash reports opened from the crash screen aren't reading material;
+    // don't let them occupy the slot above the menu.
+    if (book.path.find("crash_report") != std::string::npos) {
+      continue;
+    }
+
     recentBooks.push_back(book);
   }
 }
@@ -117,7 +123,11 @@ void HomeActivity::onEnter() {
   loadRecentBooks(metrics.homeRecentBooksCount);
 
   const auto base = static_cast<int>(recentBooks.size());
-  selectorIndex = initialMenuItem == HomeMenuItem::NONE ? 0 : base + menuItemToIndex(initialMenuItem, hasOpdsServers);
+  // Default the cursor to Token Mode (first menu item) rather than the
+  // recents above it — one Confirm from boot enters token mode.
+  selectorIndex =
+      base + menuItemToIndex(initialMenuItem == HomeMenuItem::NONE ? HomeMenuItem::TOKEN_MODE : initialMenuItem,
+                             hasOpdsServers);
 
   // Trigger first update
   requestUpdate();
