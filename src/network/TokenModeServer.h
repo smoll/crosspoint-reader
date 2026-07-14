@@ -35,10 +35,32 @@ class TokenModeServer {
   // True once a card image has been pushed (idle screen must not repaint over it).
   bool hasDisplayedImage() const { return displayedImage; }
 
+  // Lets /api/token-status report which network the device is on.
+  void setNetworkInfo(bool apMode, const char* ssid) {
+    reportApMode = apMode;
+    reportSsid = ssid;
+  }
+
+  // The app can reconfigure networking; the activity polls these after each
+  // handleClient pump (the 200 goes out before the network drops).
+  bool takePendingWifiJoin() {
+    const bool value = pendingWifiJoin;
+    pendingWifiJoin = false;
+    return value;
+  }
+  bool takePendingHotspotSwitch() {
+    const bool value = pendingHotspotSwitch;
+    pendingHotspotSwitch = false;
+    return value;
+  }
+
  private:
   void handleDisplayPost();
   void handleDisplayRawBody();
   void handleStatus();
+  void handleWifiScan();
+  void handleWifiProvision();
+  void handleModeSwitch();
   void handleNotFound();
   bool serveEmbeddedAsset(const char* path);
   void touch() { lastRequestMs = millis(); }
@@ -53,4 +75,8 @@ class TokenModeServer {
   bool running = false;
   bool displayedImage = false;
   unsigned long lastRequestMs = 0;
+  bool reportApMode = false;
+  std::string reportSsid;
+  bool pendingWifiJoin = false;
+  bool pendingHotspotSwitch = false;
 };

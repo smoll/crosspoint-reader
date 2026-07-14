@@ -1,12 +1,18 @@
 #include "TokenModeServer.h"
 
+#include <ArduinoJson.h>
 #include <GfxRenderer.h>
 #include <Logging.h>
 #include <Memory.h>
+#include <WiFi.h>
 
+#include <algorithm>
 #include <cstring>
+#include <vector>
 
 #include "TokenWebAssets.embedded.h"
+#include "WifiCredentialStore.h"
+#include "activities/RenderLock.h"
 
 namespace {
 constexpr const char* TAG = "TOKENSRV";
@@ -35,6 +41,11 @@ void TokenModeServer::begin() {
     server->send(204, "text/plain", "");
   });
   server->on("/api/token-status", HTTP_GET, [this] { handleStatus(); });
+  // Wi-Fi management: the app scans/provisions through the device so the
+  // phone never needs (and iOS never grants) Wi-Fi scanning itself.
+  server->on("/api/wifi/scan", HTTP_GET, [this] { handleWifiScan(); });
+  server->on("/api/wifi", HTTP_POST, [this] { handleWifiProvision(); });
+  server->on("/api/mode", HTTP_POST, [this] { handleModeSwitch(); });
   server->onNotFound([this] { handleNotFound(); });
 
   server->begin();
@@ -125,10 +136,103 @@ void TokenModeServer::handleDisplayPost() {
 void TokenModeServer::handleStatus() {
   touch();
   sendCors();
-  char body[128];
-  snprintf(body, sizeof(body), "{\"mode\":\"token\",\"width\":%d,\"height\":%d,\"freeHeap\":%u}",
-           renderer.getScreenWidth(), renderer.getScreenHeight(), (unsigned)ESP.getFreeHeap());
-  server->send(200, "application/json", body);
+  JsonDocument doc;
+  doc["mode"] = "token";
+  doc["network"] = reportApMode ? "ap" : "sta";
+  doc["ssid"] = reportSsid;
+  doc["width"] = renderer.getScreenWidth();
+  doc["height"] = renderer.getScreenHeight();
+  doc["freeHeap"] = ESP.getFreeHeap();
+  std::string body;
+  serializeJson(doc, body);
+  server->send(200, "application/json", body.c_str());
+}
+
+void TokenModeServer::handleWifiScan() {
+  touch();
+  sendCors();
+  // Blocking scan (~2-3s). The device's 2.4 GHz-only radio is the filter:
+  // 5 GHz-only and out-of-range networks simply don't show up.
+  const int16_t found = WiFi.scanNetworks(false /* sync */, false /* no hidden */);
+  struct Net {
+    String ssid;
+    int32_t rssi;
+    bool secure;
+  };
+  std::vector<Net> nets;
+  nets.reserve(found > 0 ? found : 0);
+  for (int16_t i = 0; i < found; i++) {
+    const String ssid = WiFi.SSID(i);
+    if (ssid.isEmpty()) continue;
+    const int32_t rssi = WiFi.RSSI(i);
+    const bool secure = WiFi.encryptionType(i) != WIFI_AUTH_OPEN;
+    // Dedupe (multiple APs per SSID): keep the strongest sighting.
+    auto existing = std::find_if(nets.begin(), nets.end(), [&](const Net& n) { return n.ssid == ssid; });
+    if (existing != nets.end()) {
+      if (rssi > existing->rssi) existing->rssi = rssi;
+    } else {
+      nets.push_back({ssid, rssi, secure});
+    }
+  }
+  WiFi.scanDelete();
+  std::sort(nets.begin(), nets.end(), [](const Net& a, const Net& b) { return a.rssi > b.rssi; });
+  constexpr size_t MAX_NETWORKS_REPORTED = 12;
+  if (nets.size() > MAX_NETWORKS_REPORTED) nets.resize(MAX_NETWORKS_REPORTED);
+
+  JsonDocument doc;
+  JsonArray arr = doc["networks"].to<JsonArray>();
+  for (const Net& n : nets) {
+    JsonObject o = arr.add<JsonObject>();
+    o["ssid"] = n.ssid;
+    o["rssi"] = n.rssi;
+    o["secure"] = n.secure;
+  }
+  std::string body;
+  serializeJson(doc, body);
+  server->send(200, "application/json", body.c_str());
+}
+
+void TokenModeServer::handleWifiProvision() {
+  touch();
+  sendCors();
+  JsonDocument doc;
+  if (deserializeJson(doc, server->arg("plain")) != DeserializationError::Ok) {
+    server->send(400, "text/plain", "invalid JSON body");
+    return;
+  }
+  const char* ssid = doc["ssid"];
+  const char* password = doc["password"] | "";
+  if (!ssid || strlen(ssid) == 0) {
+    server->send(400, "text/plain", "ssid is required");
+    return;
+  }
+  if (strlen(password) > 0 && strlen(password) < 8) {
+    server->send(400, "text/plain", "WPA2 passwords are at least 8 characters");
+    return;
+  }
+  {
+    RenderLock lock;  // the store's SD write shares the SPI bus with the panel
+    WIFI_STORE.addCredential(ssid, password);
+    WIFI_STORE.setLastConnectedSsid(ssid);
+  }
+  LOG_DBG(TAG, "Provisioned Wi-Fi '%s'; joining after response", ssid);
+  // Reply first — the connection dies when the hotspot goes down.
+  server->send(200, "application/json", "{\"ok\":true,\"joining\":true}");
+  pendingWifiJoin = true;
+}
+
+void TokenModeServer::handleModeSwitch() {
+  touch();
+  sendCors();
+  JsonDocument doc;
+  deserializeJson(doc, server->arg("plain"));
+  const char* mode = doc["mode"] | "";
+  if (strcmp(mode, "ap") != 0) {
+    server->send(400, "text/plain", "supported: {\"mode\":\"ap\"}");
+    return;
+  }
+  server->send(200, "application/json", "{\"ok\":true,\"switching\":true}");
+  pendingHotspotSwitch = true;
 }
 
 bool TokenModeServer::serveEmbeddedAsset(const char* path) {

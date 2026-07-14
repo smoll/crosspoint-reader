@@ -18,9 +18,10 @@ namespace {
 constexpr const char* TAG = "TOKENACT";
 constexpr const char* MDNS_HOSTNAME = "crosspoint";
 constexpr const char* AP_SSID = "ScootScoot";
+constexpr const char* SETUP_LINK_BASE = "https://smoll.github.io";
 constexpr uint8_t AP_CHANNEL = 1;
 constexpr uint8_t AP_MAX_CONNECTIONS = 4;
-constexpr int QR_SIZE = 172;
+constexpr int QR_SIZE = 240;
 
 // Stable per-device WPA2 password (>= 8 chars), derived from the factory MAC
 // so it survives reflashes and can live on a sticker or the join QR.
@@ -29,6 +30,22 @@ std::string deriveApPassword() {
   char pass[16];
   snprintf(pass, sizeof(pass), "scoot-%04x", static_cast<unsigned>((mac >> 24) & 0xFFFF));
   return pass;
+}
+
+// Minimal percent-encoding for URL fragment values (SSIDs can be anything).
+std::string urlEncode(const std::string& value) {
+  std::string out;
+  out.reserve(value.size() * 3);
+  for (const unsigned char c : value) {
+    if (isalnum(c) || c == '-' || c == '_' || c == '.' || c == '~') {
+      out += static_cast<char>(c);
+    } else {
+      char buf[4];
+      snprintf(buf, sizeof(buf), "%%%02X", c);
+      out += buf;
+    }
+  }
+  return out;
 }
 }  // namespace
 
@@ -95,7 +112,8 @@ void TokenModeActivity::startWifiSelection(const bool autoConnectOnly) {
 void TokenModeActivity::startHotspot() {
   stopServer();
   LOG_DBG(TAG, "Starting token hotspot...");
-  WiFi.mode(WIFI_AP);
+  // AP+STA so /api/wifi/scan can run while the hotspot is up.
+  WiFi.mode(WIFI_AP_STA);
   delay(100);
 
   apPassword = deriveApPassword();
@@ -142,6 +160,7 @@ void TokenModeActivity::startServer() {
     onGoHome();
     return;
   }
+  server->setNetworkInfo(apMode, connectedSSID.c_str());
 
   state = State::SERVER_RUNNING;
   requestUpdate();
@@ -172,6 +191,19 @@ void TokenModeActivity::loop() {
 
   if (mappedInput.wasPressed(MappedInputManager::Button::Back)) {
     onGoHome();
+    return;
+  }
+
+  // The app can reconfigure networking over HTTP; the 200 already went out,
+  // so give TCP a moment to flush before tearing the network down.
+  if (server->takePendingWifiJoin()) {
+    delay(300);
+    startWifiSelection(true);  // auto-joins the just-provisioned network; hotspot on failure
+    return;
+  }
+  if (server->takePendingHotspotSwitch()) {
+    delay(300);
+    startHotspot();
     return;
   }
 
@@ -223,18 +255,31 @@ void TokenModeActivity::renderIdleScreen() const {
   renderer.displayBuffer();
 }
 
+// ONE QR for both modes: a universal link that opens the app (or the
+// hosted fallback page) with connection info in the URL fragment.
+// Format pinned by packages/core/src/setup-link.ts + its tests.
+std::string TokenModeActivity::buildSetupUrl() const {
+  std::string url = std::string(SETUP_LINK_BASE) + "/x3#v=1&m=" + (apMode ? "ap" : "sta");
+  url += "&s=" + urlEncode(connectedSSID);
+  if (apMode) url += "&p=" + urlEncode(apPassword);
+  url += "&h=";
+  url += apMode ? connectedIP : (std::string(MDNS_HOSTNAME) + ".local");
+  return url;
+}
+
 void TokenModeActivity::renderStaIdleScreen(int y) const {
   const auto& metrics = UITheme::getInstance().getMetrics();
   const auto pageWidth = renderer.getScreenWidth();
   const int height10 = renderer.getLineHeight(UI_10_FONT_ID);
 
-  renderer.drawCenteredText(UI_10_FONT_ID, y, tr(STR_TOKEN_MODE_HINT), true, EpdFontFamily::BOLD);
+  renderer.drawCenteredText(UI_10_FONT_ID, y, tr(STR_TOKEN_SCAN_HINT), true, EpdFontFamily::BOLD);
   y += height10 + metrics.verticalSpacing * 2;
 
-  const std::string url = std::string("http://") + MDNS_HOSTNAME + ".local/";
-  QrUtils::drawQrCode(renderer, Rect{(pageWidth - QR_SIZE) / 2, y, QR_SIZE, QR_SIZE}, url);
+  QrUtils::drawQrCode(renderer, Rect{(pageWidth - QR_SIZE) / 2, y, QR_SIZE, QR_SIZE}, buildSetupUrl());
   y += QR_SIZE + metrics.verticalSpacing * 2;
 
+  // Manual fallback for browsers: the device-served PWA.
+  const std::string url = std::string("http://") + MDNS_HOSTNAME + ".local/";
   renderer.drawCenteredText(UI_10_FONT_ID, y, url.c_str(), true);
   y += height10 + 5;
   const std::string ipUrl = std::string(tr(STR_OR_HTTP_PREFIX)) + connectedIP + "/";
@@ -245,26 +290,17 @@ void TokenModeActivity::renderHotspotIdleScreen(int y) const {
   const auto& metrics = UITheme::getInstance().getMetrics();
   const auto pageWidth = renderer.getScreenWidth();
   const int height10 = renderer.getLineHeight(UI_10_FONT_ID);
-  const int textX = (pageWidth - QR_SIZE) / 2 + QR_SIZE + metrics.verticalSpacing;
 
-  // Step 1: join the hotspot (QR encodes SSID + WPA2 password)
-  renderer.drawCenteredText(UI_10_FONT_ID, y, tr(STR_CONNECT_WIFI_HINT), true, EpdFontFamily::BOLD);
-  y += height10 + metrics.verticalSpacing;
+  renderer.drawCenteredText(UI_10_FONT_ID, y, tr(STR_TOKEN_SCAN_HINT), true, EpdFontFamily::BOLD);
+  y += height10 + metrics.verticalSpacing * 2;
 
-  const std::string wifiConfig = std::string("WIFI:T:WPA;S:") + AP_SSID + ";P:" + apPassword + ";;";
-  QrUtils::drawQrCode(renderer, Rect{(pageWidth - QR_SIZE) / 2 - QR_SIZE / 2, y, QR_SIZE, QR_SIZE}, wifiConfig);
-  renderer.drawText(UI_10_FONT_ID, textX - QR_SIZE / 2, y + QR_SIZE / 2 - height10, AP_SSID);
-  const std::string passLine = std::string(tr(STR_PASSWORD)) + ": " + apPassword;
-  renderer.drawText(SMALL_FONT_ID, textX - QR_SIZE / 2, y + QR_SIZE / 2 + 5, passLine.c_str());
+  QrUtils::drawQrCode(renderer, Rect{(pageWidth - QR_SIZE) / 2, y, QR_SIZE, QR_SIZE}, buildSetupUrl());
   y += QR_SIZE + metrics.verticalSpacing * 2;
 
-  // Step 2: open the app
-  renderer.drawCenteredText(UI_10_FONT_ID, y, tr(STR_TOKEN_MODE_HINT), true, EpdFontFamily::BOLD);
-  y += height10 + metrics.verticalSpacing;
-
-  const std::string url = std::string("http://") + connectedIP + "/";
-  QrUtils::drawQrCode(renderer, Rect{(pageWidth - QR_SIZE) / 2 - QR_SIZE / 2, y, QR_SIZE, QR_SIZE}, url);
-  renderer.drawText(UI_10_FONT_ID, textX - QR_SIZE / 2, y + QR_SIZE / 2 - height10, url.c_str());
-  const std::string mdnsUrl = std::string(tr(STR_OR_HTTP_PREFIX)) + MDNS_HOSTNAME + ".local/";
-  renderer.drawText(SMALL_FONT_ID, textX - QR_SIZE / 2, y + QR_SIZE / 2 + 5, mdnsUrl.c_str());
+  // Manual fallback: join by hand, then open the device page.
+  const std::string ssidLine = std::string(AP_SSID) + " · " + tr(STR_PASSWORD) + ": " + apPassword;
+  renderer.drawCenteredText(UI_10_FONT_ID, y, ssidLine.c_str(), true);
+  y += height10 + 5;
+  const std::string url = std::string(tr(STR_OR_HTTP_PREFIX)) + connectedIP + "/";
+  renderer.drawCenteredText(SMALL_FONT_ID, y, url.c_str(), true);
 }

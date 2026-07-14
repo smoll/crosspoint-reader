@@ -45,6 +45,7 @@ class TokenModeActivity final : public Activity {
   void startHotspot();
   void startServer();
   void stopServer();
+  std::string buildSetupUrl() const;
   void renderIdleScreen() const;
   void renderStaIdleScreen(int startY) const;
   void renderHotspotIdleScreen(int startY) const;
